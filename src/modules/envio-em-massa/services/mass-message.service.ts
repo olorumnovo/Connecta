@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { massMessageSchema, parseContacts, type MassMessageInput } from "@/modules/envio-em-massa/schemas/mass-message.schema";
 import { MetaApiError, MetaService } from "@/services/meta/meta.service";
-import { buildTemplate, unsupportedTemplateReason, type MetaTemplate } from "@/services/meta/template";
+import { buildTemplate, templateVariables, unsupportedTemplateReason, type MetaTemplate } from "@/services/meta/template";
 
 type ContactResult = {
   phone: string;
@@ -253,8 +253,8 @@ function parseValidation<T>(callback: () => T) {
 function toTemplateOption(template: MetaTemplate): MassTemplateOption {
   const header = template.components.find((item) => item.type === "HEADER");
   const body = template.components.find((item) => item.type === "BODY");
-  const headerVariables = extractVariables(header?.text);
-  const bodyVariables = extractVariables(body?.text);
+  const headerVariables = templateVariables(header?.text);
+  const bodyVariables = templateVariables(body?.text);
 
   return {
     ...template,
@@ -264,12 +264,6 @@ function toTemplateOption(template: MetaTemplate): MassTemplateOption {
     hasMediaHeader: Boolean(header?.format && ["IMAGE", "VIDEO", "DOCUMENT"].includes(header.format)),
     previewText: body?.text ?? "",
   };
-}
-
-function extractVariables(text = "") {
-  return [...new Set(Array.from(text.matchAll(/\{\{([^{}]+)\}\}/g), (match) => match[1].trim()))].sort(
-    (a, b) => Number(a) - Number(b),
-  );
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>) {
