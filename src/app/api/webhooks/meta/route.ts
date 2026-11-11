@@ -9,6 +9,7 @@ import { ChatbotRepository } from "@/repositories/chatbot.repository";
 import { MetaWhatsappService } from "@/services/meta/meta-whatsapp.service";
 import { OpenAiService, type ExtractedCustomerData } from "@/services/openai/openai.service";
 import { recordDeliveryStatuses } from "@/modules/envio-em-massa/services/delivery-status.service";
+import { getMetaConfigForPhoneNumber, listWebhookVerifyTokens } from "@/modules/contas/accounts";
 
 const chatbotEngineService = new ChatbotEngineService();
 const chatbotRepository = new ChatbotRepository();
@@ -65,9 +66,9 @@ export async function GET(request: Request) {
   const mode = url.searchParams.get("hub.mode");
   const token = url.searchParams.get("hub.verify_token");
   const challenge = url.searchParams.get("hub.challenge");
-  const expected = process.env.META_WEBHOOK_VERIFY_TOKEN?.trim();
+  const acceptedTokens = await listWebhookVerifyTokens();
 
-  if (mode === "subscribe" && challenge && expected && token === expected) {
+  if (mode === "subscribe" && challenge && token && acceptedTokens.includes(token)) {
     return new NextResponse(challenge, { status: 200 });
   }
 
@@ -93,7 +94,8 @@ export async function POST(request: Request) {
         return NextResponse.json(errorResponse("Limite de webhooks excedido.", "RATE_LIMITED"), { status: 429 });
       }
 
-      const incoming = await extractIncomingMessage(event.message);
+      const eventConfig = await getMetaConfigForPhoneNumber(event.phoneNumberId);
+      const incoming = await extractIncomingMessage(event.message, eventConfig);
       if (!event.message.from || !incoming.message) {
         results.push({ ignored: true, reason: "invalid-message" });
         continue;
@@ -101,7 +103,7 @@ export async function POST(request: Request) {
 
       const dispatchConversation = await findDispatchConversation(event.message.from, event.phoneNumberId);
       if (dispatchConversation) {
-        const dispatchIncoming = await extractDispatchIncomingMessage(event.message, incoming.message);
+        const dispatchIncoming = await extractDispatchIncomingMessage(event.message, incoming.message, eventConfig);
         if (event.message.id) {
           const claimed = await chatbotRepository.claimInboundMessage({
             conversationId: dispatchConversation.id,
@@ -109,7 +111,7 @@ export async function POST(request: Request) {
             providerId: event.message.id,
             rawPayload: rawPayload as Prisma.InputJsonValue,
           });
-          if (claimed) await metaWhatsappService.markAsRead(event.message.id);
+          if (claimed) await metaWhatsappService.markAsRead(event.message.id, eventConfig);
           results.push({ state: "DISPATCH_INBOX", replied: false, duplicated: !claimed });
         } else {
           await chatbotRepository.saveMessage({
@@ -168,7 +170,7 @@ function flattenMessages(payload: MetaWebhookPayload) {
   return events;
 }
 
-async function extractIncomingMessage(message: MetaMessage): Promise<{ message: string; extractedData?: ExtractedCustomerData }> {
+async function extractIncomingMessage(message: MetaMessage, config?: import("@/services/meta/meta.service").MetaConfig | null): Promise<{ message: string; extractedData?: ExtractedCustomerData }> {
   const text = (
     message.text?.body ??
     message.button?.text ??
@@ -185,7 +187,7 @@ async function extractIncomingMessage(message: MetaMessage): Promise<{ message: 
 
   if (message.audio?.id) {
     try {
-      const media = await metaWhatsappService.downloadMediaAsDataUrl(message.audio.id);
+      const media = await metaWhatsappService.downloadMediaAsDataUrl(message.audio.id, config);
       const transcription = await openAiService.transcribeAudio({
         url: media.dataUrl,
         mimeType: media.mimeType,
@@ -204,7 +206,7 @@ async function extractIncomingMessage(message: MetaMessage): Promise<{ message: 
   if (mediaId) {
     if (caption?.trim()) return { message: caption.trim() };
     try {
-      const media = await metaWhatsappService.downloadMediaAsDataUrl(mediaId);
+      const media = await metaWhatsappService.downloadMediaAsDataUrl(mediaId, config);
       if (media.mimeType.startsWith("image/") || media.mimeType === "application/pdf" || mediaMime === "application/pdf") {
         const extractedData = await openAiService.extractCustomerData({
           url: media.dataUrl,
@@ -231,24 +233,35 @@ async function extractIncomingMessage(message: MetaMessage): Promise<{ message: 
 }
 
 async function findDispatchConversation(phone: string, phoneNumberId?: string) {
-  // The Meta webhook serves both the chatbot and mass-dispatch numbers. A reply
-  // can only enter the dispatch inbox when it arrived on the configured sender.
-  if (!phoneNumberId || phoneNumberId !== process.env.META_WHATSAPP_PHONE_NUMBER_ID?.trim()) return null;
+  if (!phoneNumberId || !/^\d+$/.test(phoneNumberId)) return null;
   const normalizedPhone = phone.replace(/\D/g, "");
   if (!normalizedPhone) return null;
-  const dispatchConversation = await prisma.chatConversation.findFirst({
+  const candidates = await prisma.chatConversation.findMany({
     where: {
       phone: normalizedPhone,
       deletedAt: null,
       memory: { path: ["source"], equals: "mass-message" },
     },
-    select: { id: true },
+    select: { id: true, memory: true },
     orderBy: { updatedAt: "desc" },
+    take: 20,
+  });
+  const dispatchConversation = candidates.find(conversation => {
+    const memory = conversation.memory && typeof conversation.memory === "object" && !Array.isArray(conversation.memory) ? conversation.memory as Record<string, unknown> : {};
+    const senderIds = Array.isArray(memory.dispatchSenderIds) ? memory.dispatchSenderIds : [];
+    return senderIds.includes(phoneNumberId) || memory.dispatchLastSenderId === phoneNumberId || (!senderIds.length && phoneNumberId === process.env.META_WHATSAPP_PHONE_NUMBER_ID?.trim());
+  });
+  if (!dispatchConversation) return null;
+  const memory = dispatchConversation.memory && typeof dispatchConversation.memory === "object" && !Array.isArray(dispatchConversation.memory) ? dispatchConversation.memory as Record<string, unknown> : {};
+  const senderIds = Array.isArray(memory.dispatchSenderIds) ? memory.dispatchSenderIds.filter((id): id is string => typeof id === "string") : [];
+  await prisma.chatConversation.update({
+    where: { id: dispatchConversation.id },
+    data: { memory: { ...memory, source: "mass-message", dispatchSenderIds: [...new Set([...senderIds, phoneNumberId])], dispatchLastSenderId: phoneNumberId } as Prisma.InputJsonValue },
   });
   return dispatchConversation;
 }
 
-async function extractDispatchIncomingMessage(message: MetaMessage, fallbackText: string) {
+async function extractDispatchIncomingMessage(message: MetaMessage, fallbackText: string, config?: import("@/services/meta/meta.service").MetaConfig | null) {
   const audioId = message.audio?.id;
   if (audioId) {
     return mediaBodyFromMeta({
@@ -257,7 +270,7 @@ async function extractDispatchIncomingMessage(message: MetaMessage, fallbackText
       mimeType: message.audio?.mime_type,
       fileName: `audio-${message.id ?? Date.now()}.ogg`,
       caption: "",
-    });
+    }, config);
   }
 
   const mediaId = message.image?.id ?? message.document?.id ?? message.video?.id;
@@ -270,7 +283,7 @@ async function extractDispatchIncomingMessage(message: MetaMessage, fallbackText
     mimeType: message.image?.mime_type ?? message.document?.mime_type ?? message.video?.mime_type,
     fileName: message.document?.filename ?? `${mediaKind}-${message.id ?? Date.now()}`,
     caption: message.image?.caption ?? message.document?.caption ?? message.video?.caption ?? "",
-  });
+  }, config);
 }
 
 async function mediaBodyFromMeta(input: {
@@ -279,9 +292,9 @@ async function mediaBodyFromMeta(input: {
   mimeType?: string;
   fileName: string;
   caption?: string;
-}) {
+}, config?: import("@/services/meta/meta.service").MetaConfig | null) {
   try {
-    const media = await metaWhatsappService.downloadMediaAsDataUrl(input.mediaId);
+    const media = await metaWhatsappService.downloadMediaAsDataUrl(input.mediaId, config);
     return {
       body: JSON.stringify({
         kind: "media",

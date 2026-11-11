@@ -7,22 +7,29 @@ import { permissions } from "@/constants/permissions";
 import { MassMessageService, MassMessageValidationError } from "@/modules/envio-em-massa/services/mass-message.service";
 import { MetaApiError } from "@/services/meta/meta.service";
 import { MAX_BATCH_CONTACTS } from "@/modules/envio-em-massa/schemas/mass-message.schema";
+import { listDispatchAccounts } from "@/modules/contas/accounts";
 
 const massMessageService = new MassMessageService();
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const user = await requireCurrentUser();
     assertPermission(user, permissions.agentsEdit);
 
-    const templates = await massMessageService.listTemplates();
+    const params = new URL(request.url).searchParams;
+    const accounts = await listDispatchAccounts();
+    if (params.get("accounts") === "1") {
+      return NextResponse.json(successResponse("Contas de disparo carregadas.", { accounts, maxBatchContacts: MAX_BATCH_CONTACTS }), { headers: { "Cache-Control": "no-store" } });
+    }
+    const templates = await massMessageService.listTemplates(params.get("accountId") || undefined);
 
     return NextResponse.json(
       successResponse("Templates carregados.", {
         templates,
+        accounts,
         maxBatchContacts: MAX_BATCH_CONTACTS,
       }),
     );

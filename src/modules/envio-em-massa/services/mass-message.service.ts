@@ -5,7 +5,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { massMessageSchema, parseContacts, type MassMessageInput } from "@/modules/envio-em-massa/schemas/mass-message.schema";
 import { MetaApiError, MetaService } from "@/services/meta/meta.service";
+import type { MetaConfig } from "@/services/meta/meta.service";
 import { buildTemplate, templateVariables, unsupportedTemplateReason, type MetaTemplate } from "@/services/meta/template";
+import { getDispatchMetaConfig } from "@/modules/contas/accounts";
 
 type ContactResult = {
   phone: string;
@@ -40,22 +42,27 @@ export class MassMessageValidationError extends Error {
 const CONCURRENCY = 5;
 
 export class MassMessageService {
-  constructor(private readonly metaService = new MetaService()) {}
-
-  async listTemplates(): Promise<MassTemplateOption[]> {
-    const templates = await this.metaService.listTemplates();
+  async listTemplates(accountId?: string): Promise<MassTemplateOption[]> {
+    let config: MetaConfig;
+    try { config = await getDispatchMetaConfig(accountId); }
+    catch (error) { throw new MassMessageValidationError(error instanceof Error ? error.message : "Selecione uma conta de WhatsApp para disparo."); }
+    const templates = await new MetaService(() => config).listTemplates();
     return templates.map((template) => toTemplateOption(template));
   }
 
   async send(rawInput: unknown, user?: { id: string; role: string }): Promise<MassMessageResult> {
     const startedAt = new Date().toISOString();
     const input = parseInput(rawInput);
+    let selectedConfig: MetaConfig;
+    try { selectedConfig = await getDispatchMetaConfig(input.accountId); }
+    catch (error) { throw new MassMessageValidationError(error instanceof Error ? error.message : "Selecione uma conta de WhatsApp para disparo."); }
+    const selectedMetaService = new MetaService(() => selectedConfig);
     const contacts = parseValidation(() => parseContacts(input.contactsText));
     let templatePayload: Record<string, unknown> | undefined;
     let templateName = input.templateName;
     let campaignMessage = input.message;
     if (input.mode === "template") {
-    const templates = await this.metaService.listTemplates();
+    const templates = await selectedMetaService.listTemplates();
     const template = templates.find((item) => input.templateId ? item.id === input.templateId : item.name === input.templateName && item.language === input.language);
 
     if (!template) {
@@ -90,8 +97,8 @@ export class MassMessageService {
           };
         }
         const providerMessageId = input.mode === "text"
-          ? await this.metaService.sendText(phone, input.message)
-          : await this.metaService.sendTemplate(phone, templatePayload!);
+          ? await selectedMetaService.sendText(phone, input.message)
+          : await selectedMetaService.sendTemplate(phone, templatePayload!);
         await registerDispatchConversation({
           phone,
           user,
@@ -100,6 +107,7 @@ export class MassMessageService {
           providerMessageId,
           mode: input.mode,
           templateName: input.mode === "template" ? templateName : undefined,
+          senderPhoneNumberId: selectedConfig.phoneNumberId,
         });
         return {
           phone,
@@ -137,6 +145,7 @@ export class MassMessageService {
     };
     await prisma.appSetting.create({data:{key:"private:dispatch-result:"+batchId,value:{
       userId:user?.id??null,startedAt,mode:input.mode,title:input.mode === "text" ? "Campanha de mensagem escrita" : templateName,
+      senderPhoneNumberId:selectedConfig.phoneNumberId,
       message:campaignMessage,
       isTest: Boolean(rawInput && typeof rawInput === "object" && "isTest" in rawInput && rawInput.isTest === true),
       total:result.total,accepted:result.accepted,failed:result.failed,uncertain:result.uncertain,contacts:result.contacts
@@ -166,6 +175,7 @@ async function registerDispatchConversation(input: {
   providerMessageId?: string;
   mode: "text" | "template";
   templateName?: string;
+  senderPhoneNumberId: string;
 }) {
   const lead = await prisma.lead.findFirst({
     where: { phone: input.phone, deletedAt: null },
@@ -188,10 +198,7 @@ async function registerDispatchConversation(input: {
     ? await prisma.chatConversation.update({
         where: { id: existing.id },
         data: {
-          memory: {
-            ...(existing.memory && typeof existing.memory === "object" && !Array.isArray(existing.memory) ? existing.memory : {}),
-            source: "mass-message",
-          },
+          memory: dispatchMemory(existing.memory, input.senderPhoneNumberId),
           updatedAt: new Date(),
           ...(lead ? { leadId: lead.id } : {}),
           ...(input.user?.role === "EMPLOYEE" ? { ownerUserId: input.user.id } : {}),
@@ -202,7 +209,7 @@ async function registerDispatchConversation(input: {
         data: {
           phone: input.phone,
           state: "START",
-          memory: { source: "mass-message" },
+          memory: dispatchMemory(null, input.senderPhoneNumberId),
           ownerUserId: input.user?.role === "EMPLOYEE" ? input.user.id : null,
           leadId: lead?.id,
         },
@@ -229,6 +236,17 @@ async function registerDispatchConversation(input: {
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
   }
+}
+
+function dispatchMemory(memory: Prisma.JsonValue | null, senderPhoneNumberId: string): Prisma.InputJsonValue {
+  const previous = memory && typeof memory === "object" && !Array.isArray(memory) ? memory as Record<string, Prisma.JsonValue> : {};
+  const senderIds = Array.isArray(previous.dispatchSenderIds) ? previous.dispatchSenderIds.filter((id): id is string => typeof id === "string") : [];
+  return {
+    ...previous,
+    source: "mass-message",
+    dispatchSenderIds: [...new Set([...senderIds, senderPhoneNumberId])],
+    dispatchLastSenderId: senderPhoneNumberId,
+  } as Prisma.InputJsonValue;
 }
 
 function parseInput(input: unknown): MassMessageInput {

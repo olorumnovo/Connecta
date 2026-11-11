@@ -3,6 +3,7 @@ import { z } from "zod";
 export const MAX_BATCH_CONTACTS = 100;
 
 export const massMessageSchema = z.object({
+  accountId: z.string().trim().max(128).default(""),
   contactsText: z.string().trim().min(1, "Informe os contatos.").max(20_000),
   mode: z.enum(["text", "template"]).default("template"),
   message: z.string().trim().max(4096).default(""),

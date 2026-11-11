@@ -23,6 +23,8 @@ type DispatchResult = {
   }>;
 };
 
+type DispatchAccount = { id: string; name: string; phone: string; phoneNumberId: string };
+
 const LAST_MASS_MESSAGE_RESULT_KEY = "connecta:meta:last-mass-message-result";
 
 export function MassMessagePanel() {
@@ -33,6 +35,10 @@ export function MassMessagePanel() {
   const [testError, setTestError] = useState<string | null>(null);
   const [sendingTest, setSendingTest] = useState(false);
   const [contacts, setContacts] = useState("");
+  const [accounts, setAccounts] = useState<DispatchAccount[]>([]);
+  const [accountId, setAccountId] = useState("");
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState("");
   const [mode, setMode] = useState<"text" | "template">("text");
   const [message, setMessage] = useState("");
   const [templateName, setTemplateName] = useState("");
@@ -47,6 +53,27 @@ export function MassMessagePanel() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DispatchResult | null>(null);
   const sendingRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAccounts() {
+      try {
+        const response = await fetch("/api/envio-em-massa?accounts=1", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok || payload.status !== "success") throw new Error(payload.message || "Não foi possível carregar as contas de envio.");
+        const available = (payload.data?.accounts ?? []) as DispatchAccount[];
+        if (!cancelled) {
+          setAccounts(available);
+          setAccountId(current => current && available.some(account => account.id === current) ? current : available[0]?.id ?? "");
+          if (!available.length) setAccountsError("Cadastre uma conta de disparo em Configurações de disparos.");
+        }
+      } catch (loadError) {
+        if (!cancelled) setAccountsError(loadError instanceof Error ? loadError.message : "Não foi possível carregar as contas de envio.");
+      } finally { if (!cancelled) setAccountsLoading(false); }
+    }
+    void loadAccounts();
+    return () => { cancelled = true; };
+  }, []);
 
   const estimatedContacts = useMemo(() => {
     const unique = new Set(
@@ -95,6 +122,7 @@ export function MassMessagePanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contactsText: test ? testPhone : contacts,
+          accountId,
           isTest: test,
           mode, message, templateName, language, mediaType,
           headerValues,
@@ -139,7 +167,7 @@ export function MassMessagePanel() {
   }
 
   const messageReady = mode === "text" ? Boolean(message.trim()) : Boolean(templateName.trim() && language.trim());
-  const submitDisabled = isSending || !messageReady || !contacts.trim() || !consentConfirmed;
+  const submitDisabled = isSending || accountsLoading || !accountId || !messageReady || !contacts.trim() || !consentConfirmed;
 
   return (
     <div className="dispatch-layout">
@@ -160,6 +188,7 @@ export function MassMessagePanel() {
         <CardContent className="dispatch-editor-body p-5 pt-0 sm:p-6 sm:pt-0">
           <form className="space-y-5" onSubmit={(event) => void handleSubmit(event)}>
             <fieldset className="space-y-5" disabled={isSending}>
+              <label className="grid gap-2"><span className="text-xs font-semibold">Conta de envio</span><select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={accountsLoading || !accounts.length} className="h-11 w-full rounded-xl border bg-background px-3 text-sm"><option value="">{accountsLoading ? "Carregando contas…" : "Selecione uma conta"}</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.phone || account.phoneNumberId}</option>)}</select><span className="text-[11px] text-muted-foreground">O disparo e os templates usarão esta conta do WhatsApp.</span>{accountsError && <span role="alert" className="text-xs text-destructive">{accountsError}</span>}</label>
               <div className="space-y-2"><p className="text-xs font-semibold">Tipo de envio</p><div role="group" aria-label="Tipo de envio" className="inline-flex gap-1 rounded-xl bg-muted/60 p-1">{([{ value: "text", label: "Texto livre" }, { value: "template", label: "Template Meta" }] as const).map((item) => <button key={item.value} type="button" aria-pressed={mode === item.value} onClick={() => setMode(item.value)} className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${mode === item.value ? "bg-primary text-white shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{item.label}</button>)}</div></div>
               {mode === "text" ? <label className="grid gap-2"><span className="text-sm font-semibold">Mensagem</span><Textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={4096} placeholder="Digite a mensagem que será enviada…" className="min-h-44 rounded-xl bg-muted/20" /><span className="text-[11px] text-muted-foreground">Texto livre depende de uma janela de atendimento aberta na Meta.</span></label> : <div className="space-y-4">
                 <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-2"><span className="text-xs font-semibold">Nome do template</span><Input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="ex: promocao_maio" className="h-11 rounded-xl bg-muted/20" /></label><label className="grid gap-2"><span className="text-xs font-semibold">Idioma</span><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="pt_BR" className="h-11 rounded-xl bg-muted/20" /></label></div>
@@ -218,7 +247,7 @@ export function MassMessagePanel() {
             <form className="space-y-4" onSubmit={(event) => void handleSubmit(event, true)}>
               <label className="block space-y-2"><span className="text-xs font-medium">Telefone de teste</span><Input value={testPhone} onChange={(event) => setTestPhone(event.target.value)} type="tel" inputMode="tel" pattern="[+]?[0-9]{10,15}" required placeholder="5511999999999" className="h-11 rounded-xl bg-muted/20" disabled={isSending} /><span className="block text-[11px] text-muted-foreground">Inclua o código do país e o DDD.</span></label>
               <label className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"><input type="checkbox" checked={testConsent} onChange={(event) => setTestConsent(event.target.checked)} disabled={isSending} className="mt-1 accent-red-600" />Tenho autorização para enviar a este número.</label>
-              <Button type="submit" className="h-11 w-full rounded-xl" disabled={isSending || !messageReady || !testConsent || !testPhone.trim()}>{sendingTest ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Send className="h-4 w-4" />}{sendingTest ? "Enviando teste…" : "Enviar teste"}</Button>
+              <Button type="submit" className="h-11 w-full rounded-xl" disabled={isSending || accountsLoading || !accountId || !messageReady || !testConsent || !testPhone.trim()}>{sendingTest ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Send className="h-4 w-4" />}{sendingTest ? "Enviando teste…" : "Enviar teste"}</Button>
               {testError && <p role="alert" className="text-xs text-destructive">{testError}</p>}
               {testResult && <div role="status" className="rounded-xl border p-3 text-xs"><p className="mb-2 font-semibold">Resultado do teste</p>{testResult.contacts.map((contact) => <div key={contact.phone} className="space-y-2"><StatusPill status={contact.status} /><p className="text-muted-foreground">{contact.detail}</p></div>)}</div>}
             </form>

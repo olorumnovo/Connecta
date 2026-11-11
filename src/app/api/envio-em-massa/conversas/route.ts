@@ -11,6 +11,8 @@ import { successResponse, errorResponse } from "@/lib/api-response";
 import { dispatchConversationScope, requireDispatchAdministrator } from "@/modules/envio-em-massa/conversation-access";
 import { MetaWhatsappService } from "@/services/meta/meta-whatsapp.service";
 import { MetaApiError } from "@/services/meta/meta.service";
+import type { MetaConfig } from "@/services/meta/meta.service";
+import { dispatchAccountIdFromMemory, getDispatchMetaConfig } from "@/modules/contas/accounts";
 
 const whatsappService = new MetaWhatsappService();
 const FREE_FORM_WINDOW_ERROR = "A Meta só permite texto livre, áudio, mídia ou documentos depois que o cliente responde e abre a janela de atendimento de 24 horas. Envie um template aprovado ou aguarde a resposta do cliente.";
@@ -156,12 +158,14 @@ export async function POST(request: Request) {
       const media = { buffer: originalBuffer, mimeType, fileName: mediaKind === "audio" ? ensureMp3FileName(file.name) : file.name };
       const dataUrl = `data:${mimeType};base64,${media.buffer.toString("base64")}`;
       const replyThrough = new Date().toISOString();
+      const config = await getDispatchMetaConfig(dispatchAccountIdFromMemory(conversation.memory));
       const providerId = await sendMediaToWhatsapp({
         phone: conversation.phone,
         kind: mediaKind,
         dataUrl,
         fileName: media.fileName,
         caption,
+        config,
       });
 
       await prisma.$transaction([
@@ -194,14 +198,15 @@ export async function POST(request: Request) {
 
     const conversation = await prisma.chatConversation.findFirst({
       where: { ...dispatchConversationScope(user), id: body.data.conversationId },
-      select: { id: true, phone: true, state: true },
+      select: { id: true, phone: true, state: true, memory: true },
     });
     if (!conversation) return NextResponse.json(errorResponse("Conversa não encontrada."), { status: 404 });
     if (conversation.state === "BLOCKED") return NextResponse.json(errorResponse("Contato bloqueado. Desbloqueie para enviar mensagens."), { status: 423 });
     if (!await hasOpenCustomerServiceWindow(conversation.id)) return NextResponse.json(errorResponse(FREE_FORM_WINDOW_ERROR), { status: 409 });
 
     const replyThrough = new Date().toISOString();
-    const providerId = await whatsappService.sendText({ phone: conversation.phone, message: body.data.content });
+    const config = await getDispatchMetaConfig(dispatchAccountIdFromMemory(conversation.memory));
+    const providerId = await whatsappService.sendText({ phone: conversation.phone, message: body.data.content, config });
     await prisma.$transaction([
       prisma.chatMessage.create({
         data: {
@@ -262,9 +267,10 @@ function sendMediaToWhatsapp(input: {
   dataUrl: string;
   fileName: string;
   caption?: string;
+  config: MetaConfig;
 }) {
-  if (input.kind === "image") return whatsappService.sendImage({ phone: input.phone, image: input.dataUrl, caption: input.caption });
-  if (input.kind === "video") return whatsappService.sendVideo({ phone: input.phone, video: input.dataUrl, caption: input.caption });
-  if (input.kind === "audio") return whatsappService.sendAudio({ phone: input.phone, audio: input.dataUrl });
-  return whatsappService.sendDocument({ phone: input.phone, document: input.dataUrl, fileName: input.fileName, caption: input.caption });
+  if (input.kind === "image") return whatsappService.sendImage({ phone: input.phone, image: input.dataUrl, caption: input.caption, config: input.config });
+  if (input.kind === "video") return whatsappService.sendVideo({ phone: input.phone, video: input.dataUrl, caption: input.caption, config: input.config });
+  if (input.kind === "audio") return whatsappService.sendAudio({ phone: input.phone, audio: input.dataUrl, config: input.config });
+  return whatsappService.sendDocument({ phone: input.phone, document: input.dataUrl, fileName: input.fileName, caption: input.caption, config: input.config });
 }
