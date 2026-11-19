@@ -149,7 +149,7 @@ export function ConversationCenter() {
     const controller = new AbortController();
     summaryRequestRef.current = controller;
     try {
-      const response = await fetch("/api/conversations?summaryOnly=1", { cache: "no-store", signal: controller.signal });
+      const response = await fetch("/api/conversations?summaryOnly=1", { cache: "no-cache", signal: controller.signal });
       const result = await response.json();
       if (result.status === "success" && !controller.signal.aborted) {
         setSummary(result.data);
@@ -187,7 +187,7 @@ export function ConversationCenter() {
     }
 
     try {
-    const response = await fetch(`/api/conversations?offset=${offset}&limit=${limit}&filter=${filter}&includeSummary=0`, { cache: "no-store", signal: controller.signal });
+    const response = await fetch(`/api/conversations?offset=${offset}&limit=${limit}&filter=${filter}&includeSummary=0`, { cache: "no-cache", signal: controller.signal });
     const result = await response.json();
     if (result.status !== "success") {
       setStatusMessage(result.message ?? "Não foi possível carregar as conversas.");
@@ -270,7 +270,7 @@ export function ConversationCenter() {
     try {
     const response = await fetch(
       `/api/conversations?conversationId=${conversationId}&messagesOffset=${nextOffset}&messagesLimit=${limit}`,
-      { cache: "no-store", signal: controller.signal },
+      { cache: "no-cache", signal: controller.signal },
     );
     const result = await response.json();
     if (controller.signal.aborted) return;

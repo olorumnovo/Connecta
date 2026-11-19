@@ -1,3 +1,4 @@
+import { privateJsonResponse } from "@/lib/private-json-response";
 import { NextResponse } from "next/server";
 import { authErrorResponse } from "@/lib/api-errors";
 import { errorResponse, successResponse } from "@/lib/api-response";
@@ -12,7 +13,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const conversationId = searchParams.get("conversationId");
     if (searchParams.get("summaryOnly") === "1") {
-      return NextResponse.json(successResponse("Contagens consultadas.", await conversationService.getSummary(user)));
+      return privateJsonResponse(request, successResponse("Contagens consultadas.", await conversationService.getSummary(user)));
     }
     const offset = Number(searchParams.get("offset") ?? "0");
     const limit = Number(searchParams.get("limit") ?? "25");
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
         offset: Number.isFinite(messagesOffset) && messagesOffset > 0 ? messagesOffset : 0,
         limit: Number.isFinite(messagesLimit) && messagesLimit > 0 ? Math.min(messagesLimit, 100) : 40,
       });
-      return NextResponse.json(successResponse("Conversa consultada.", conversation));
+      return privateJsonResponse(request, successResponse("Conversa consultada.", conversation));
     }
 
     const [conversations, users] = await Promise.all([
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
       conversationService.listAssignableUsers(),
     ]);
 
-    return NextResponse.json(successResponse("Conversas consultadas.", { conversations, users }));
+    return privateJsonResponse(request, successResponse("Conversas consultadas.", { conversations, users }));
   } catch (error) {
     const authError = authErrorResponse(error);
     if (authError) return authError;

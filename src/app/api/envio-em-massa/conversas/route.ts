@@ -1,3 +1,5 @@
+import { lightweightMessageBody } from "@/lib/conversation-media";
+import { privateJsonResponse } from "@/lib/private-json-response";
 import { publishConversationEvent } from "@/server/realtime/conversation-events";
 import { pendingRepliesQuery } from "@/modules/envio-em-massa/pending-replies";
 import { isMp3Audio } from "@/lib/audio/mp3";
@@ -56,10 +58,10 @@ export async function GET(request: Request) {
     const catalog = tagRecords.map(record=>record.value as {id:string;label:string;color:string});
     const conversationsWithPending = conversations.map(({memory,...item}) => {
       const ids = (memory as {dispatchTagIds?:unknown})?.dispatchTagIds;
-      return {...item, pendingReplyCount:pendingCounts.get(item.id)??0, tags:catalog.filter(tag=>Array.isArray(ids)&&ids.includes(tag.id)).map(({id,label,color})=>({id,label,color}))};
+      return {...item, messages: item.messages.map(message => ({ ...message, body: lightweightMessageBody(message.id, message.body, !id) })), pendingReplyCount:pendingCounts.get(item.id)??0, tags:catalog.filter(tag=>Array.isArray(ids)&&ids.includes(tag.id)).map(({id,label,color})=>({id,label,color}))};
     });
     const employees = user.role === "ADMIN" ? await prisma.user.findMany({ where: { role: { in: ["EMPLOYEE", "ADMIN"] }, status: "ACTIVE", deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [];
-    return NextResponse.json(successResponse("Conversas consultadas.", { conversations: conversationsWithPending, employees, total, limit, hasMore: !id && conversations.length < total }), { headers: { "Cache-Control": "no-store" } });
+    return privateJsonResponse(request, successResponse("Conversas consultadas.", { conversations: conversationsWithPending, employees, total, limit, hasMore: !id && conversations.length < total }));
   } catch (error) {
     return authErrorResponse(error) ?? NextResponse.json(errorResponse("Não foi possível consultar as conversas."), { status: 500 });
   }

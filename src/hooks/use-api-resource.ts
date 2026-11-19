@@ -8,7 +8,7 @@ const inFlightRequests = new Map<string, Promise<{ response: Response; body: str
 function requestOnce(url: string) {
   const existing = inFlightRequests.get(url);
   if (existing) return existing;
-  const request = fetch(url, { cache: "no-store" })
+  const request = fetch(url, { cache: "no-cache" })
     .then(async (response) => ({ response, body: await response.text() }))
     .finally(() => window.setTimeout(() => inFlightRequests.delete(url), 250));
   inFlightRequests.set(url, request);

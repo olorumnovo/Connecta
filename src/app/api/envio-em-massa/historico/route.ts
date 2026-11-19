@@ -1,3 +1,4 @@
+import { privateJsonResponse } from "@/lib/private-json-response";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/auth-context";
@@ -57,7 +58,7 @@ export async function GET(request: Request) {
         missingContacts: Math.max(0, data.total - contacts.length),
       };
     });
-    return NextResponse.json(successResponse("Histórico consultado.", { entries, total, offset, hasMore: offset + batches.length < total }), { headers: { "Cache-Control": "no-store" } });
+    return privateJsonResponse(request, successResponse("Histórico consultado.", { entries, total, offset, hasMore: offset + batches.length < total }));
   } catch (error) {
     return authErrorResponse(error) ?? NextResponse.json(errorResponse("Não foi possível carregar o histórico. Tente novamente."), { status: 500 });
   }

@@ -34,6 +34,10 @@ export async function openConversationStream(signal: AbortSignal, lifetimeMs = 2
   const onAbort = () => { void close(); };
   const onNotification = (message: { channel?: string; payload?: string }) => {
     if (message.channel === channel && message.payload) {
+      // Delivery receipts update the history, not the conversation contents.
+      try {
+        if (JSON.parse(message.payload).type === "dispatch_status_updated") return;
+      } catch { return; }
       // Never broadcast bodies, phone numbers, IDs or ownership to other users.
       send("conversation-update", { refresh: true });
     }

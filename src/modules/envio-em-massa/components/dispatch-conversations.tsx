@@ -390,9 +390,9 @@ function MessageBubble({ message }: { message: Message }) {
 }
 
 function MediaMessage({ media }: { media: MediaBody }) {
-  if (media.mediaKind === "image") return <div className="space-y-2"><a href={media.dataUrl} target="_blank" rel="noreferrer"><img src={media.dataUrl} alt={media.caption || media.fileName} className="max-h-72 rounded-xl object-contain" /></a>{media.caption ? <p className="whitespace-pre-wrap break-words">{media.caption}</p> : null}</div>;
-  if (media.mediaKind === "audio") return <div className="min-w-56 space-y-2"><div className="flex items-center gap-2 text-xs font-medium"><Mic className="h-4 w-4" />Áudio</div><audio controls src={media.dataUrl} className="w-full" /></div>;
-  if (media.mediaKind === "video") return <div className="space-y-2"><video controls src={media.dataUrl} className="max-h-72 rounded-xl" />{media.caption ? <p className="whitespace-pre-wrap break-words">{media.caption}</p> : null}</div>;
+  if (media.mediaKind === "image") return <div className="space-y-2"><a href={media.dataUrl} target="_blank" rel="noreferrer"><img loading="lazy" src={media.dataUrl} alt={media.caption || media.fileName} className="max-h-72 rounded-xl object-contain" /></a>{media.caption ? <p className="whitespace-pre-wrap break-words">{media.caption}</p> : null}</div>;
+  if (media.mediaKind === "audio") return <div className="min-w-56 space-y-2"><div className="flex items-center gap-2 text-xs font-medium"><Mic className="h-4 w-4" />Áudio</div><audio controls preload="none" src={media.dataUrl} className="w-full" /></div>;
+  if (media.mediaKind === "video") return <div className="space-y-2"><video controls preload="none" src={media.dataUrl} className="max-h-72 rounded-xl" />{media.caption ? <p className="whitespace-pre-wrap break-words">{media.caption}</p> : null}</div>;
   return <a href={media.dataUrl} target="_blank" rel="noreferrer" download={media.fileName} className="flex items-center gap-3 rounded-xl border border-black/10 bg-white/70 p-3 text-neutral-900"><FileText className="h-5 w-5" /><span className="min-w-0"><span className="block truncate font-medium">{media.fileName}</span><span className="text-xs opacity-70">Abrir documento</span></span></a>;
 }
 
